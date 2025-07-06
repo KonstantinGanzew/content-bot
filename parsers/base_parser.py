@@ -13,23 +13,74 @@ logger = logging.getLogger(__name__)
 class PostData:
     """Класс для хранения данных поста."""
     
-    def __init__(self, post_id: str, image_url: str, title: str = "", description: str = "", 
-                 post_url: str = "", tags: Optional[List[str]] = None):
+    def __init__(self, post_id: str, media_url: str = "", title: str = "", description: str = "", 
+                 post_url: str = "", tags: Optional[List[str]] = None, media_type: str = "image",
+                 all_media: Optional[List[Dict]] = None):
         self.post_id = post_id
-        self.image_url = image_url
+        self.media_url = media_url  # URL для основного медиа (для обратной совместимости)
         self.title = title
         self.description = description
         self.post_url = post_url
         self.tags = tags or []
+        self.media_type = media_type  # "image" или "video" для основного медиа
+        self.all_media = all_media or []  # Список всех медиа [{url, type}, ...]
+        
+        # Если all_media пустой, но есть основное медиа, добавляем его
+        if not self.all_media and self.media_url:
+            self.all_media = [{'url': self.media_url, 'type': self.media_type}]
+    
+    # Для обратной совместимости
+    @property
+    def image_url(self):
+        return self.media_url if self.media_type == "image" else None
+    
+    @property
+    def video_url(self):
+        return self.media_url if self.media_type == "video" else None
+    
+    def is_video(self) -> bool:
+        return self.media_type == "video"
+    
+    def is_image(self) -> bool:
+        return self.media_type == "image"
+    
+    def has_multiple_media(self) -> bool:
+        """Проверяет есть ли несколько медиа файлов."""
+        return len(self.all_media) > 1
+    
+    def get_images(self) -> List[Dict]:
+        """Возвращает только изображения."""
+        return [media for media in self.all_media if media['type'] == 'image']
+    
+    def get_videos(self) -> List[Dict]:
+        """Возвращает только видео."""
+        return [media for media in self.all_media if media['type'] == 'video']
+    
+    def get_primary_media(self) -> Dict:
+        """Возвращает основное медиа (первое видео или первое изображение)."""
+        if self.all_media:
+            # Приоритет видео
+            videos = self.get_videos()
+            if videos:
+                return videos[0]
+            # Иначе первое изображение
+            images = self.get_images()
+            if images:
+                return images[0]
+            # Иначе первое любое медиа
+            return self.all_media[0]
+        return {'url': self.media_url, 'type': self.media_type}
     
     def __dict__(self):
         return {
             'post_id': self.post_id,
-            'image_url': self.image_url,
+            'media_url': self.media_url,
+            'media_type': self.media_type,
             'title': self.title,
             'description': self.description,
             'post_url': self.post_url,
-            'tags': self.tags
+            'tags': self.tags,
+            'all_media': self.all_media
         }
 
 class BaseParser(ABC):
@@ -109,6 +160,27 @@ class BaseParser(ABC):
         # Проверяем расширение файла
         image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
         return any(path.endswith(ext) for ext in image_extensions)
+    
+    def is_valid_video_url(self, url: str) -> bool:
+        """Проверяет является ли URL видео."""
+        if not url:
+            return False
+        
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+        
+        # Проверяем расширение файла
+        video_extensions = ['.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv', '.m4v', '.3gp']
+        return any(path.endswith(ext) for ext in video_extensions)
+    
+    def get_media_type(self, url: str) -> str:
+        """Определяет тип медиа (image/video) по URL."""
+        if self.is_valid_video_url(url):
+            return "video"
+        elif self.is_valid_image_url(url):
+            return "image"
+        else:
+            return "unknown"
     
     @abstractmethod
     async def parse_posts(self, limit: int = 10) -> List[PostData]:

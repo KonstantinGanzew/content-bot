@@ -5,105 +5,140 @@
 """
 
 import asyncio
+import logging
 import signal
 import sys
 from pathlib import Path
+import os
 
 # Добавляем корневую директорию в PYTHONPATH
 sys.path.insert(0, str(Path(__file__).parent))
 
-from utils.logger import setup_logging
+# Импортируем модули проекта
 from config.settings import settings
 from scheduler import ParserScheduler
-import logging
+from utils.logger import setup_logging
+from utils.database import database
 
+# Настройка логирования
+setup_logging()
 logger = logging.getLogger(__name__)
 
-class ParserBot:
-    """Главный класс приложения."""
+# Глобальный флаг для корректного завершения
+shutdown_event = asyncio.Event()
+
+def signal_handler(signum, frame):
+    """Обработчик сигналов для корректного завершения."""
+    logger.info(f"Получен сигнал {signum}. Завершение работы...")
+    shutdown_event.set()
+
+async def check_single_instance():
+    """Проверяет что запущен только один экземпляр бота."""
+    lock_file = Path("data/bot.lock")
     
-    def __init__(self):
-        self.scheduler = None
-        self.running = False
-    
-    async def start(self):
-        """Запускает бота."""
-        try:
-            # Настраиваем логирование
-            setup_logging()
-            logger.info("🚀 Запуск парсер-бота")
-            
-            # Проверяем настройки
-            settings.validate()
-            logger.info("✓ Настройки проверены")
-            
-            # Создаем планировщик
-            self.scheduler = ParserScheduler()
-            
-            # Настраиваем обработчики сигналов
-            self._setup_signal_handlers()
-            
-            # Запускаем планировщик
-            logger.info("Запуск планировщика...")
-            self.running = True
-            await self.scheduler.start()
-            
-        except Exception as e:
-            logger.error(f"Ошибка при запуске: {e}")
-            return False
+    try:
+        # Создаем директорию если её нет
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
         
+        # Проверяем есть ли уже lock файл
+        if lock_file.exists():
+            # Читаем PID из файла
+            try:
+                with open(lock_file, 'r') as f:
+                    old_pid = int(f.read().strip())
+                
+                # Проверяем активен ли процесс
+                try:
+                    os.kill(old_pid, 0)  # Проверяем что процесс существует
+                    logger.error(f"❌ Бот уже запущен (PID: {old_pid})")
+                    logger.error("   Завершите предыдущий экземпляр или удалите файл data/bot.lock")
+                    return False
+                except (OSError, ProcessLookupError):
+                    # Процесс не найден, файл блокировки устарел
+                    logger.info("Найден устаревший файл блокировки, удаляем...")
+                    lock_file.unlink()
+                    
+            except (ValueError, FileNotFoundError):
+                # Файл поврежден, удаляем
+                lock_file.unlink()
+        
+        # Создаем новый lock файл
+        with open(lock_file, 'w') as f:
+            f.write(str(os.getpid()))
+        
+        logger.info(f"✅ Создан файл блокировки: {lock_file}")
         return True
-    
-    async def stop(self):
-        """Останавливает бота."""
-        if self.running:
-            logger.info("🛑 Остановка парсер-бота")
-            self.running = False
-            
-            if self.scheduler:
-                await self.scheduler.stop()
-            
-            logger.info("Бот остановлен")
-    
-    def _setup_signal_handlers(self):
-        """Настраивает обработчики сигналов."""
-        def signal_handler(signum, frame):
-            logger.info(f"Получен сигнал {signum}")
-            # Создаем задачу для остановки
-            asyncio.create_task(self.stop())
         
-        # Обработчики для graceful shutdown
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке блокировки: {e}")
+        return False
+
+async def cleanup_on_exit():
+    """Очистка при выходе."""
+    lock_file = Path("data/bot.lock")
+    
+    try:
+        if lock_file.exists():
+            lock_file.unlink()
+            logger.info("✅ Файл блокировки удален")
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось удалить файл блокировки: {e}")
 
 async def main():
-    """Главная функция."""
-    bot = ParserBot()
+    """Основная функция программы."""
+    logger.info("🚀 Запуск Parser Bot")
+    
+    # Проверяем единственность экземпляра
+    if not await check_single_instance():
+        return 1
     
     try:
-        await bot.start()
-    except KeyboardInterrupt:
-        logger.info("Получен сигнал прерывания")
+        # Загружаем базу данных
+        await database.load()
+        
+        # Создаем и запускаем планировщик
+        scheduler = ParserScheduler()
+        
+        # Настраиваем обработчики сигналов
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Запускаем планировщик
+        logger.info("⏰ Запуск планировщика")
+        start_task = asyncio.create_task(scheduler.start())
+        
+        # Ждем сигнал завершения
+        await shutdown_event.wait()
+        
+        # Корректное завершение
+        logger.info("🛑 Завершение работы...")
+        await scheduler.stop()
+        
+        # Ждем завершения задач
+        if not start_task.done():
+            start_task.cancel()
+            try:
+                await start_task
+            except asyncio.CancelledError:
+                pass
+        
+        logger.info("✅ Parser Bot завершен")
+        return 0
+        
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
+        logger.error(f"💥 Критическая ошибка: {e}")
+        return 1
     finally:
-        await bot.stop()
-
-def run():
-    """Точка входа в приложение."""
-    try:
-        # Для Windows совместимости
-        if sys.platform == 'win32':
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        
-        # Запускаем основной цикл
-        asyncio.run(main())
-        
-    except KeyboardInterrupt:
-        print("\nПрерывание пользователем")
-    except Exception as e:
-        print(f"Критическая ошибка: {e}")
-        sys.exit(1)
+        # Очистка при выходе
+        await cleanup_on_exit()
 
 if __name__ == "__main__":
-    run() 
+    try:
+        exit_code = asyncio.run(main())
+        sys.exit(exit_code)
+    except KeyboardInterrupt:
+        logger.info("Получен Ctrl+C, завершение...")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Необработанная ошибка: {e}")
+        sys.exit(1) 

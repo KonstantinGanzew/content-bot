@@ -16,7 +16,9 @@ PARSERS = {
 # Telegram настройки
 TELEGRAM = {
     'MAX_IMAGE_SIZE': 10 * 1024 * 1024,  # 10MB
-    'SUPPORTED_FORMATS': ['.jpg', '.jpeg', '.png', '.gif', '.webp'],
+    'MAX_VIDEO_SIZE': 50 * 1024 * 1024,  # 50MB для видео
+    'SUPPORTED_IMAGE_FORMATS': ['.jpg', '.jpeg', '.png', '.gif', '.webp'],
+    'SUPPORTED_VIDEO_FORMATS': ['.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv'],
     'PARSE_MODE': 'HTML',
     'DISABLE_NOTIFICATION': False
 }

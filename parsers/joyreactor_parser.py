@@ -47,36 +47,38 @@ class JoyReactorParser(BaseParser):
                     
                 try:
                     post_data = await self._extract_post_data(container)
-                    if post_data and post_data.get('images'):
+                    if post_data and post_data.get('media_url'):
                         # Проверяем фильтрацию нежелательного контента
                         if self._should_filter_post(post_data):
                             self.logger.debug(f"🚫 Пропускаем отфильтрованный пост: {post_data.get('title', 'Без названия')}")
                             continue
                         
                         post_id = post_data['id']
-                        image_url = post_data['images'][0]
+                        media_url = post_data['media_url']
                         
                         # Проверяем дубликаты по ID
                         if post_id in seen_ids:
                             self.logger.debug(f"🔄 Пропускаем дубликат по ID: {post_id}")
                             continue
                         
-                        # Проверяем дубликаты по изображению
-                        if image_url in seen_images:
-                            self.logger.debug(f"🖼️ Пропускаем дубликат по изображению: {post_data.get('title', 'Без названия')}")
+                        # Проверяем дубликаты по медиа
+                        if media_url in seen_images:
+                            self.logger.debug(f"🖼️ Пропускаем дубликат по медиа: {post_data.get('title', 'Без названия')}")
                             continue
                         
                         # Добавляем в множества для отслеживания
                         seen_ids.add(post_id)
-                        seen_images.add(image_url)
+                        seen_images.add(media_url)
                         
                         # Конвертируем в PostData объект
                         post_obj = PostData(
                             post_id=post_id,
-                            image_url=image_url,
+                            media_url=post_data['media_url'],
                             title=post_data['title'],
                             post_url=post_data.get('link', ''),
-                            tags=[]
+                            tags=[],
+                            media_type=post_data['media_type'],
+                            all_media=post_data.get('all_media', [])
                         )
                         posts.append(post_obj)
                         self.logger.info(f"✅ Найден уникальный пост: {post_data.get('title', 'Без названия')}")
@@ -121,48 +123,172 @@ class JoyReactorParser(BaseParser):
         # Убираем дубликаты сохраняя порядок
         unique_containers = []
         seen = set()
+        filtered_comments = 0
+        
         for container in containers:
             if id(container) not in seen:
                 seen.add(id(container))
+                
+                # Исключаем контейнеры с комментариями
+                if self._is_comment_container(container):
+                    filtered_comments += 1
+                    continue
+                    
                 unique_containers.append(container)
         
+        if filtered_comments > 0:
+            self.logger.info(f"🚫 Отфильтровано контейнеров-комментариев: {filtered_comments}")
+        
+        self.logger.info(f"Найдено потенциальных контейнеров постов: {len(unique_containers)}")
         return unique_containers[:100]  # Увеличиваем лимит для обработки всей страницы
+    
+    def _is_comment_container(self, container) -> bool:
+        """Проверяет является ли контейнер комментарием"""
+        # Проверяем наличие div с классом comment-content
+        comment_divs = container.find_all('div', class_='comment-content')
+        if comment_divs:
+            return True
+        
+        # Проверяем является ли сам контейнер div с классом comment-content
+        if container.name == 'div' and container.get('class'):
+            classes = container.get('class')
+            if isinstance(classes, list):
+                if 'comment-content' in classes:
+                    return True
+            elif isinstance(classes, str):
+                if 'comment-content' in classes:
+                    return True
+        
+        return False
     
     async def _extract_post_data(self, container) -> Optional[Dict]:
         """Извлечение данных поста из контейнера"""
         try:
-            # Ищем изображения
-            images = container.find_all('img')
-            if not images:
-                return None
+            # Ищем медиа контент (изображения и видео)
+            valid_media = []
             
-            # Фильтруем изображения (исключаем аватары, маленькие изображения и т.д.)
-            valid_images = []
+            # 1. Ищем изображения
+            images = container.find_all('img')
             for img in images:
                 src = img.get('src') or img.get('data-src')
-                if src and self._is_valid_image(src, img):
+                if src and self._is_valid_media(src, img, 'image'):
                     if not src.startswith('http'):
                         src = self.base_url + src if src.startswith('/') else self.base_url + '/' + src
-                    valid_images.append(src)
+                    valid_media.append({'url': src, 'type': 'image'})
             
-            if not valid_images:
+            # 2. Ищем видео теги
+            videos = container.find_all('video')
+            for video in videos:
+                # Проверяем source теги внутри video
+                sources = video.find_all('source')
+                for source in sources:
+                    src = source.get('src')
+                    if src and self.is_valid_video_url(src):
+                        if not src.startswith('http'):
+                            src = self.base_url + src if src.startswith('/') else self.base_url + '/' + src
+                        valid_media.append({'url': src, 'type': 'video'})
+                        break  # Берем первый подходящий источник
+                
+                # Если нет source тегов, проверяем src атрибут video
+                if not sources:
+                    src = video.get('src')
+                    if src and self.is_valid_video_url(src):
+                        if not src.startswith('http'):
+                            src = self.base_url + src if src.startswith('/') else self.base_url + '/' + src
+                        valid_media.append({'url': src, 'type': 'video'})
+            
+            # 3. Ищем ссылки на видео файлы
+            links = container.find_all('a')
+            for link in links:
+                href = link.get('href')
+                if href and self.is_valid_video_url(href):
+                    if not href.startswith('http'):
+                        href = self.base_url + href if href.startswith('/') else self.base_url + '/' + href
+                    valid_media.append({'url': href, 'type': 'video'})
+            
+            # 4. Ищем видео в data-атрибутах изображений (JoyReactor специфика)
+            for img in images:
+                # Проверяем различные data-атрибуты которые могут содержать видео
+                data_attrs = ['data-video', 'data-webm', 'data-mp4', 'data-original', 'data-fullsize']
+                for attr in data_attrs:
+                    data_src = img.get(attr)
+                    if data_src and self.is_valid_video_url(data_src):
+                        if not data_src.startswith('http'):
+                            data_src = self.base_url + data_src if data_src.startswith('/') else self.base_url + '/' + data_src
+                        valid_media.append({'url': data_src, 'type': 'video'})
+                
+                # Также проверяем src и data-src на наличие видео файлов
+                for attr in ['src', 'data-src']:
+                    src = img.get(attr)
+                    if src and self.is_valid_video_url(src):
+                        if not src.startswith('http'):
+                            src = self.base_url + src if src.startswith('/') else self.base_url + '/' + src
+                        valid_media.append({'url': src, 'type': 'video'})
+            
+            # 5. Ищем все элементы с атрибутами указывающими на видео
+            all_elements = container.find_all(attrs={"data-webm": True})
+            all_elements.extend(container.find_all(attrs={"data-mp4": True}))
+            all_elements.extend(container.find_all(attrs={"data-video": True}))
+            
+            for element in all_elements:
+                for attr in ['data-webm', 'data-mp4', 'data-video']:
+                    video_src = element.get(attr)
+                    if video_src and self.is_valid_video_url(video_src):
+                        if not video_src.startswith('http'):
+                            video_src = self.base_url + video_src if video_src.startswith('/') else self.base_url + '/' + video_src
+                        valid_media.append({'url': video_src, 'type': 'video'})
+            
+            # 6. Поиск видео файлов в тексте HTML (агрессивный поиск)
+            html_text = str(container)
+            video_extensions = ['.webm', '.mp4', '.avi', '.mov', '.mkv', '.flv']
+            
+            for ext in video_extensions:
+                # Ищем URL с расширениями видео в HTML тексте
+                import re
+                pattern = rf'https?://[^\s\'"<>]+{re.escape(ext)}(?:\?[^\s\'"<>]*)?'
+                matches = re.findall(pattern, html_text, re.IGNORECASE)
+                
+                for match in matches:
+                    if self.is_valid_video_url(match):
+                        # Избегаем дубликатов
+                        if not any(media['url'] == match for media in valid_media):
+                            valid_media.append({'url': match, 'type': 'video'})
+                            self.logger.debug(f"🎥 Найден видео URL в HTML: {match}")
+            
+            if not valid_media:
                 return None
+            
+            # Логируем найденные медиа файлы для отладки
+            video_count = sum(1 for media in valid_media if media['type'] == 'video')
+            image_count = sum(1 for media in valid_media if media['type'] == 'image')
+            self.logger.debug(f"Найдено медиа: {video_count} видео, {image_count} изображений")
             
             # Ищем ссылку на пост
             post_link = None
-            links = container.find_all('a', href=re.compile(r'/post/'))
-            if links:
-                href = links[0].get('href')
+            post_links = container.find_all('a', href=re.compile(r'/post/'))
+            if post_links:
+                href = post_links[0].get('href')
                 if href:
                     post_link = self.base_url + href if href.startswith('/') else href
             
             # Ищем заголовок или описание
             title = self._extract_title(container)
             
+            # Берем первый найденный медиа файл (приоритет видео > изображения)
+            primary_media = None
+            for media in valid_media:
+                if media['type'] == 'video':
+                    primary_media = media
+                    break
+            if not primary_media:
+                primary_media = valid_media[0]
+            
             return {
-                'id': self._generate_post_id(valid_images[0], post_link, title),
+                'id': self._generate_post_id(primary_media['url'], post_link, title),
                 'title': title,
-                'images': valid_images,
+                'media_url': primary_media['url'],
+                'media_type': primary_media['type'],
+                'all_media': valid_media,  # Все найденные медиа
                 'link': post_link,
                 'source': 'JoyReactor'
             }
@@ -171,15 +297,15 @@ class JoyReactorParser(BaseParser):
             self.logger.error(f"Ошибка извлечения данных поста: {e}")
             return None
     
-    def _is_valid_image(self, src: str, img_tag) -> bool:
-        """Проверка валидности изображения"""
+    def _is_valid_media(self, src: str, tag, media_type: str) -> bool:
+        """Проверка валидности медиа (изображения или видео)"""
         if not src:
             return False
             
-        # Исключаем системные изображения
+        # Исключаем системные файлы
         exclude_patterns = [
             'avatar', 'icon', 'logo', 'button', 'arrow', 'smile', 'emoji',
-            '/static/', '/css/', '/js/', '.gif', 'loading'
+            '/static/', '/css/', '/js/', 'loading'
         ]
         
         src_lower = src.lower()
@@ -187,17 +313,25 @@ class JoyReactorParser(BaseParser):
             if pattern in src_lower:
                 return False
         
-        # Проверяем размеры если доступны
-        width = img_tag.get('width')
-        height = img_tag.get('height')
-        
-        if width and height:
-            try:
-                w, h = int(width), int(height)
-                if w < 100 or h < 100:  # Исключаем маленькие изображения
-                    return False
-            except (ValueError, TypeError):
-                pass
+        # Проверяем тип медиа
+        if media_type == 'image':
+            if not self.is_valid_image_url(src):
+                return False
+            
+            # Проверяем размеры если доступны (только для изображений)
+            width = tag.get('width')
+            height = tag.get('height')
+            
+            if width and height:
+                try:
+                    w, h = int(width), int(height)
+                    if w < 100 or h < 100:  # Исключаем маленькие изображения
+                        return False
+                except (ValueError, TypeError):
+                    pass
+        elif media_type == 'video':
+            if not self.is_valid_video_url(src):
+                return False
         
         return True
     
@@ -233,11 +367,9 @@ class JoyReactorParser(BaseParser):
         
         return False
     
-    def _generate_post_id(self, image_url: str, post_link: Optional[str], title: str = "") -> str:
+    def _generate_post_id(self, media_url: str, post_link: Optional[str], title: str = "") -> str:
         """Генерация уникального ID поста с улучшенной дедупликацией"""
         import hashlib
-        import time
-        import random
         
         # Первый приоритет: ID из ссылки на пост
         if post_link:
@@ -245,28 +377,29 @@ class JoyReactorParser(BaseParser):
             if match:
                 return f"joyreactor_{match.group(1)}"
         
-        # Второй приоритет: ID из имени файла изображения
-        if image_url:
-            filename = image_url.split('/')[-1].split('?')[0]  # Убираем параметры
+        # Второй приоритет: ID из имени файла медиа
+        if media_url:
+            filename = media_url.split('/')[-1].split('?')[0]  # Убираем параметры
             
             # Если есть числовой ID в имени файла (6+ цифр), используем его
             file_id_match = re.search(r'(\d{6,})', filename)
             if file_id_match:
                 return f"joyreactor_{file_id_match.group(1)}"
         
-        # Третий приоритет: комбинированный хеш от URL изображения + заголовка
-        if image_url:
-            # Создаем более уникальный ключ
-            content_key = f"{image_url}_{title}_{time.time()}"
+        # Третий приоритет: стабильный хеш от URL медиа + заголовка
+        if media_url:
+            # Создаем стабильный ключ БЕЗ времени
+            content_key = f"{media_url}_{title}"
             content_hash = hashlib.md5(content_key.encode()).hexdigest()[:12]
             return f"joyreactor_{content_hash}"
         
-        # Последний резерв: timestamp + случайное число + уникальный хеш
-        timestamp = str(int(time.time() * 1000))[-8:]
-        random_num = random.randint(10000, 99999)
-        unique_str = f"{timestamp}_{random_num}_{title[:20]}"
-        unique_hash = hashlib.md5(unique_str.encode()).hexdigest()[:8]
-        return f"joyreactor_{unique_hash}"
+        # Последний резерв: хеш от заголовка
+        if title:
+            title_hash = hashlib.md5(title.encode()).hexdigest()[:8]
+            return f"joyreactor_{title_hash}"
+        
+        # Если совсем ничего нет - используем константу
+        return "joyreactor_unknown"
     
     async def get_post_details(self, post_url: str) -> Optional[PostData]:
         """Получает детальную информацию о посте."""
@@ -318,11 +451,13 @@ class JoyReactorParser(BaseParser):
             
             return PostData(
                 post_id=post_id,
-                image_url=image_url,
+                media_url=image_url,
                 title=title,
                 description=description,
                 post_url=post_url,
-                tags=tags
+                tags=tags,
+                media_type="image",
+                all_media=[{'url': image_url, 'type': 'image'}]
             )
             
         except Exception as e:
