@@ -37,26 +37,51 @@ async def diagnose_duplicates():
             with open(db_file, 'r', encoding='utf-8') as f:
                 db_data = json.load(f)
             
-            if isinstance(db_data, dict):
+            # Поддержка разных форматов
+            if isinstance(db_data, list):
+                # Старый формат
+                sent_posts = db_data
+                sent_media_urls = []
+            elif isinstance(db_data, dict):
+                # Новый формат
                 sent_posts = db_data.get('sent_posts', [])
+                sent_media_urls = db_data.get('sent_media_urls', [])
             else:
-                sent_posts = db_data if isinstance(db_data, list) else []
+                sent_posts = []
+                sent_media_urls = []
             
             print(f"\n📊 База данных:")
             print(f"   Отправленных постов: {len(sent_posts)}")
+            print(f"   Отправленных URL медиа: {len(sent_media_urls)}")
             
             if sent_posts:
-                # Проверяем дубликаты
+                # Проверяем дубликаты постов
                 unique_posts = set(sent_posts)
-                duplicates = len(sent_posts) - len(unique_posts)
+                post_duplicates = len(sent_posts) - len(unique_posts)
                 
-                if duplicates > 0:
-                    print(f"   🔄 Дубликатов в базе: {duplicates}")
+                if post_duplicates > 0:
+                    print(f"   🔄 Дубликатов постов в базе: {post_duplicates}")
                     print(f"   💡 Запустите fix_duplicates.bat для очистки")
                 else:
-                    print("   ✅ Дубликатов в базе нет")
+                    print("   ✅ Дубликатов постов в базе нет")
                     
-                print(f"   📝 Последние 3 ID: {sent_posts[-3:]}")
+                print(f"   📝 Последние 3 ID постов: {sent_posts[-3:]}")
+            
+            if sent_media_urls:
+                # Проверяем дубликаты URL медиа
+                unique_media_urls = set(sent_media_urls)
+                media_duplicates = len(sent_media_urls) - len(unique_media_urls)
+                
+                if media_duplicates > 0:
+                    print(f"   🔄 Дубликатов URL медиа в базе: {media_duplicates}")
+                    print(f"   💡 Запустите fix_duplicates.bat для очистки")
+                else:
+                    print("   ✅ Дубликатов URL медиа в базе нет")
+                    
+                print(f"   🔗 Последние 2 URL медиа:")
+                for url in sent_media_urls[-2:]:
+                    short_url = url[:50] + "..." if len(url) > 50 else url
+                    print(f"      {short_url}")
                 
         except Exception as e:
             print(f"   ❌ Ошибка чтения базы: {e}")
@@ -116,16 +141,18 @@ async def diagnose_duplicates():
         print(f"   ❌ Ошибка: {e}")
     
     print("\n🎯 ВЫВОДЫ:")
-    print("1. Основная причина 'дубликатов' - множественные медиа отправлялись отдельными сообщениями")
-    print("2. Теперь множественные медиа отправляются одной группой")
-    print("3. Добавлена проверка единственности экземпляра бота")
-    print("4. Исправлена генерация ID для стабильности")
+    print("1. Основная причина дубликатов - одинаковые URL медиа в разных постах")
+    print("2. Теперь бот отслеживает уникальность URL картинок и видео")
+    print("3. Множественные медиа из поста отправляются одной группой")
+    print("4. Добавлена проверка единственности экземпляра бота")
+    print("5. База данных хранит: посты + URL медиа отдельно")
     
     print("\n💡 ЧТО ДЕЛАТЬ:")
     print("• Убедитесь что запущен только один экземпляр бота")
+    print("• Запустите fix_duplicates.bat для очистки дубликатов в базе")
     print("• Если нужно больше контента - запустите clear_db.bat")
     print("• Перезапустите бота для применения исправлений")
-    print("• Следите за логами - теперь должна быть отправка групп медиа")
+    print("• Теперь одинаковые картинки не будут отправляться повторно!")
 
 if __name__ == "__main__":
     asyncio.run(diagnose_duplicates()) 

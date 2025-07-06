@@ -15,6 +15,7 @@ class PostDatabase:
     def __init__(self, db_file: Optional[str] = None):
         self.db_file = Path(db_file or settings.DATABASE_FILE or 'data/sent_posts.json')
         self.sent_posts: Set[str] = set()
+        self.sent_media_urls: Set[str] = set()  # Новое: отслеживание URL медиа
         self._lock = asyncio.Lock()
     
     async def load(self) -> bool:
@@ -26,48 +27,55 @@ class PostDatabase:
                 
                 if not self.db_file.exists():
                     logger.info("Файл базы данных не существует, создаем новый")
-                    await self._save_to_file([])
+                    await self._save_to_file([], [])
                     return True
                 
                 async with aiofiles.open(self.db_file, 'r', encoding='utf-8') as f:
                     content = await f.read()
-                    data = json.loads(content) if content.strip() else []
+                    data = json.loads(content) if content.strip() else {}
                     
                     # Поддержка разных форматов данных
                     if isinstance(data, list):
                         # Старый формат: список ID
                         self.sent_posts = set(data)
+                        self.sent_media_urls = set()
                     elif isinstance(data, dict):
-                        # Новый формат: словарь с ключом sent_posts
+                        # Новый формат: словарь с ключами sent_posts и sent_media_urls
                         self.sent_posts = set(data.get('sent_posts', []))
+                        self.sent_media_urls = set(data.get('sent_media_urls', []))
                     else:
                         # Пустой или неизвестный формат
                         self.sent_posts = set()
+                        self.sent_media_urls = set()
                 
-                logger.info(f"Загружено {len(self.sent_posts)} отправленных постов")
+                logger.info(f"Загружено {len(self.sent_posts)} отправленных постов и {len(self.sent_media_urls)} URL медиа")
                 return True
                 
             except Exception as e:
                 logger.error(f"Ошибка при загрузке базы данных: {e}")
                 self.sent_posts = set()
+                self.sent_media_urls = set()
                 return False
     
     async def save(self) -> bool:
         """Сохраняет базу данных в файл."""
         async with self._lock:
             try:
-                await self._save_to_file(list(self.sent_posts))
-                logger.debug(f"База данных сохранена: {len(self.sent_posts)} постов")
+                await self._save_to_file(list(self.sent_posts), list(self.sent_media_urls))
+                logger.debug(f"База данных сохранена: {len(self.sent_posts)} постов, {len(self.sent_media_urls)} URL медиа")
                 return True
                 
             except Exception as e:
                 logger.error(f"Ошибка при сохранении базы данных: {e}")
                 return False
     
-    async def _save_to_file(self, data: List[str]):
+    async def _save_to_file(self, posts: List[str], media_urls: List[str]):
         """Сохраняет данные в файл."""
-        # Всегда сохраняем в новом формате (словарь)
-        save_data = {'sent_posts': data}
+        # Сохраняем в новом формате (словарь с отдельными массивами)
+        save_data = {
+            'sent_posts': posts,
+            'sent_media_urls': media_urls
+        }
         async with aiofiles.open(self.db_file, 'w', encoding='utf-8') as f:
             await f.write(json.dumps(save_data, indent=2, ensure_ascii=False))
     
@@ -76,8 +84,18 @@ class PostDatabase:
         async with self._lock:
             if post_id not in self.sent_posts:
                 self.sent_posts.add(post_id)
-                await self._save_to_file(list(self.sent_posts))
+                await self._save_to_file(list(self.sent_posts), list(self.sent_media_urls))
                 logger.debug(f"Добавлен пост в базу: {post_id}")
+                return True
+            return False
+    
+    async def add_media_url(self, media_url: str) -> bool:
+        """Добавляет URL медиа в базу отправленных."""
+        async with self._lock:
+            if media_url not in self.sent_media_urls:
+                self.sent_media_urls.add(media_url)
+                await self._save_to_file(list(self.sent_posts), list(self.sent_media_urls))
+                logger.debug(f"Добавлен URL медиа в базу: {media_url}")
                 return True
             return False
     
@@ -85,13 +103,27 @@ class PostDatabase:
         """Проверяет был ли пост уже отправлен."""
         return post_id in self.sent_posts
     
+    async def is_media_url_sent(self, media_url: str) -> bool:
+        """Проверяет был ли URL медиа уже отправлен."""
+        return media_url in self.sent_media_urls
+    
     async def remove_post(self, post_id: str) -> bool:
         """Удаляет пост из базы (для тестирования)."""
         async with self._lock:
             if post_id in self.sent_posts:
                 self.sent_posts.remove(post_id)
-                await self._save_to_file(list(self.sent_posts))
+                await self._save_to_file(list(self.sent_posts), list(self.sent_media_urls))
                 logger.debug(f"Удален пост из базы: {post_id}")
+                return True
+            return False
+    
+    async def remove_media_url(self, media_url: str) -> bool:
+        """Удаляет URL медиа из базы (для тестирования)."""
+        async with self._lock:
+            if media_url in self.sent_media_urls:
+                self.sent_media_urls.remove(media_url)
+                await self._save_to_file(list(self.sent_posts), list(self.sent_media_urls))
+                logger.debug(f"Удален URL медиа из базы: {media_url}")
                 return True
             return False
     
@@ -118,7 +150,7 @@ class PostDatabase:
                     added_count += 1
             
             if added_count > 0:
-                await self._save_to_file(list(self.sent_posts))
+                await self._save_to_file(list(self.sent_posts), list(self.sent_media_urls))
                 logger.info(f"Добавлено {added_count} постов в базу")
             
             return added_count
@@ -127,6 +159,7 @@ class PostDatabase:
         """Возвращает статистику базы данных."""
         return {
             'total_sent_posts': len(self.sent_posts),
+            'total_sent_media_urls': len(self.sent_media_urls),
             'database_file': str(self.db_file),
             'file_exists': self.db_file.exists()
         }
@@ -136,7 +169,8 @@ class PostDatabase:
         async with self._lock:
             try:
                 self.sent_posts.clear()
-                await self._save_to_file(list(self.sent_posts))
+                self.sent_media_urls.clear()
+                await self._save_to_file(list(self.sent_posts), list(self.sent_media_urls))
                 logger.warning("База данных очищена")
                 return True
             except Exception as e:

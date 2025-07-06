@@ -26,36 +26,70 @@ def fix_duplicates():
             with open(db_file, 'r', encoding='utf-8') as f:
                 db_data = json.load(f)
             
-            # Получаем список отправленных постов
-            if isinstance(db_data, dict):
+            # Получаем списки отправленных данных
+            if isinstance(db_data, list):
+                # Старый формат
+                sent_posts = db_data
+                sent_media_urls = []
+            elif isinstance(db_data, dict):
+                # Новый формат
                 sent_posts = db_data.get('sent_posts', [])
+                sent_media_urls = db_data.get('sent_media_urls', [])
             else:
-                sent_posts = db_data if isinstance(db_data, list) else []
+                sent_posts = []
+                sent_media_urls = []
             
             print(f"📊 Текущее состояние базы:")
             print(f"   Отправленных постов: {len(sent_posts)}")
+            print(f"   Отправленных URL медиа: {len(sent_media_urls)}")
             
+            # Обработка дубликатов постов
+            posts_cleaned = False
             if len(sent_posts) > 0:
-                print(f"   Последние ID: {sent_posts[-3:]}")
+                print(f"   Последние ID постов: {sent_posts[-3:]}")
                 
-                # Проверяем наличие дубликатов
+                # Проверяем наличие дубликатов постов
                 unique_posts = set(sent_posts)
-                duplicates_count = len(sent_posts) - len(unique_posts)
+                post_duplicates_count = len(sent_posts) - len(unique_posts)
                 
-                if duplicates_count > 0:
-                    print(f"   🔄 Найдено дубликатов: {duplicates_count}")
-                    
-                    # Удаляем дубликаты
-                    clean_posts = list(unique_posts)
-                    clean_data = {'sent_posts': clean_posts}
-                    
-                    with open(db_file, 'w', encoding='utf-8') as f:
-                        json.dump(clean_data, f, ensure_ascii=False, indent=2)
-                    
-                    print(f"   ✅ Дубликаты удалены. Осталось: {len(clean_posts)} постов")
+                if post_duplicates_count > 0:
+                    print(f"   🔄 Найдено дубликатов постов: {post_duplicates_count}")
+                    sent_posts = list(unique_posts)
+                    posts_cleaned = True
                 else:
-                    print("   ✅ Дубликатов в базе не найдено")
-                    
+                    print("   ✅ Дубликатов постов в базе не найдено")
+            
+            # Обработка дубликатов URL медиа
+            media_cleaned = False
+            if len(sent_media_urls) > 0:
+                print(f"   Последние URL медиа: {[url[:30]+'...' for url in sent_media_urls[-2:]]}")
+                
+                # Проверяем наличие дубликатов URL медиа
+                unique_media_urls = set(sent_media_urls)
+                media_duplicates_count = len(sent_media_urls) - len(unique_media_urls)
+                
+                if media_duplicates_count > 0:
+                    print(f"   🔄 Найдено дубликатов URL медиа: {media_duplicates_count}")
+                    sent_media_urls = list(unique_media_urls)
+                    media_cleaned = True
+                else:
+                    print("   ✅ Дубликатов URL медиа в базе не найдено")
+            
+            # Сохраняем очищенные данные если были изменения
+            if posts_cleaned or media_cleaned:
+                clean_data = {
+                    'sent_posts': sent_posts,
+                    'sent_media_urls': sent_media_urls
+                }
+                
+                with open(db_file, 'w', encoding='utf-8') as f:
+                    json.dump(clean_data, f, ensure_ascii=False, indent=2)
+                
+                print(f"   ✅ Дубликаты удалены.")
+                print(f"   📊 Осталось: {len(sent_posts)} постов, {len(sent_media_urls)} URL медиа")
+            else:
+                print("   ✅ Очистка не требуется")
+                
         except Exception as e:
             print(f"   ❌ Ошибка при обработке базы: {e}")
             

@@ -38,6 +38,8 @@ class TelegramSender:
     
     async def send_post(self, post_data: PostData) -> bool:
         """Отправляет пост в Telegram чат."""
+        from utils.database import database
+        
         logger.info(f"📤 Отправляю пост: {post_data.post_id}")
         
         local_file_paths = []
@@ -52,42 +54,70 @@ class TelegramSender:
                 media_list = [{'url': post_data.media_url, 'type': post_data.media_type}]
                 logger.info(f"📸 Найдено 1 медиа файл в посте")
             
-            # Скачиваем все медиа файлы
-            valid_media_files = []
+            # Фильтруем уже отправленные URL медиа
+            unique_media_list = []
+            duplicate_count = 0
             
-            for i, media in enumerate(media_list):
+            for media in media_list:
+                media_url = media['url']
+                
+                # Проверяем не отправляли ли уже этот URL медиа
+                if await database.is_media_url_sent(media_url):
+                    duplicate_count += 1
+                    logger.info(f"🔄 Пропускаем уже отправленное медиа: {media_url[:60]}...")
+                    continue
+                
+                unique_media_list.append(media)
+            
+            if duplicate_count > 0:
+                logger.info(f"📊 Пропущено {duplicate_count} уже отправленных медиа")
+            
+            # Проверяем остались ли новые медиа для отправки
+            if not unique_media_list:
+                logger.info(f"⏭️ Все медиа из поста {post_data.post_id} уже отправлены ранее")
+                return True  # Считаем успешной отправкой, т.к. контент уже был доставлен
+            
+            logger.info(f"📤 К отправке: {len(unique_media_list)} новых медиа файлов")
+            
+            # Скачиваем новые медиа файлы
+            valid_media_files = []
+            sent_media_urls = []  # Список URL которые успешно отправим
+            
+            for i, media in enumerate(unique_media_list):
                 media_url = media['url']
                 media_type = media['type']
                 
                 # Получаем информацию о медиа файле
                 media_info = await self._get_media_info(media_url)
                 if not media_info:
-                    logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(media_list)} - файл недоступен")
+                    logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(unique_media_list)} - файл недоступен")
                     continue
                 
                 # Проверяем размер в зависимости от типа медиа
                 max_size = self.max_video_size if media_type == "video" else self.max_image_size
                 if media_info['size'] > max_size:
-                    logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(media_list)} - слишком большой размер")
+                    logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(unique_media_list)} - слишком большой размер")
                     continue
                 
                 # Проверяем формат
                 if not self._is_supported_format(media_info.get('content_type', ''), media_type):
-                    logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(media_list)} - неподдерживаемый формат")
+                    logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(unique_media_list)} - неподдерживаемый формат")
                     continue
                 
                 # Скачиваем медиа файл
                 local_file_path = await self._download_media(media_url, f"{post_data.post_id}_{i}", media_type)
                 if not local_file_path:
-                    logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(media_list)} - не удалось скачать")
+                    logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(unique_media_list)} - не удалось скачать")
                     continue
                 
                 local_file_paths.append(local_file_path)
                 valid_media_files.append({
                     'file_path': local_file_path,
                     'media_type': media_type,
+                    'media_url': media_url,  # Сохраняем URL для добавления в базу
                     'is_first': i == 0
                 })
+                sent_media_urls.append(media_url)
             
             # Проверяем что есть хотя бы один файл для отправки
             if not valid_media_files:
@@ -95,6 +125,8 @@ class TelegramSender:
                 return False
             
             # Отправляем все медиа одной группой
+            success = False
+            
             if len(valid_media_files) == 1:
                 # Одно медиа - отправляем обычным способом
                 media_file = valid_media_files[0]
@@ -107,20 +139,24 @@ class TelegramSender:
                 
                 if success:
                     logger.info(f"✅ Успешно отправлено 1 медиа файл")
-                    return True
                 else:
                     logger.error(f"❌ Не удалось отправить медиа файл")
-                    return False
             else:
                 # Множественные медиа - отправляем группой
                 success = await self._send_media_group(valid_media_files, post_data)
                 
                 if success:
                     logger.info(f"✅ Успешно отправлена группа из {len(valid_media_files)} медиа файлов")
-                    return True
                 else:
                     logger.error(f"❌ Не удалось отправить группу медиа файлов")
-                    return False
+            
+            # Если отправка успешна, добавляем URL медиа в базу отправленных
+            if success:
+                for media_url in sent_media_urls:
+                    await database.add_media_url(media_url)
+                logger.info(f"📝 Добавлено {len(sent_media_urls)} URL медиа в базу отправленных")
+            
+            return success
             
         except Exception as e:
             logger.error(f"💥 Ошибка при отправке поста {post_data.post_id}: {e}")

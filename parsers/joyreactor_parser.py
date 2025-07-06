@@ -174,7 +174,9 @@ class JoyReactorParser(BaseParser):
                 if src and self._is_valid_media(src, img, 'image'):
                     if not src.startswith('http'):
                         src = self.base_url + src if src.startswith('/') else self.base_url + '/' + src
-                    valid_media.append({'url': src, 'type': 'image'})
+                    # Проверяем дубликаты
+                    if not any(media['url'] == src for media in valid_media):
+                        valid_media.append({'url': src, 'type': 'image'})
             
             # 2. Ищем видео теги
             videos = container.find_all('video')
@@ -186,7 +188,9 @@ class JoyReactorParser(BaseParser):
                     if src and self.is_valid_video_url(src):
                         if not src.startswith('http'):
                             src = self.base_url + src if src.startswith('/') else self.base_url + '/' + src
-                        valid_media.append({'url': src, 'type': 'video'})
+                        # Проверяем дубликаты
+                        if not any(media['url'] == src for media in valid_media):
+                            valid_media.append({'url': src, 'type': 'video'})
                         break  # Берем первый подходящий источник
                 
                 # Если нет source тегов, проверяем src атрибут video
@@ -195,7 +199,9 @@ class JoyReactorParser(BaseParser):
                     if src and self.is_valid_video_url(src):
                         if not src.startswith('http'):
                             src = self.base_url + src if src.startswith('/') else self.base_url + '/' + src
-                        valid_media.append({'url': src, 'type': 'video'})
+                        # Проверяем дубликаты
+                        if not any(media['url'] == src for media in valid_media):
+                            valid_media.append({'url': src, 'type': 'video'})
             
             # 3. Ищем ссылки на видео файлы
             links = container.find_all('a')
@@ -204,7 +210,9 @@ class JoyReactorParser(BaseParser):
                 if href and self.is_valid_video_url(href):
                     if not href.startswith('http'):
                         href = self.base_url + href if href.startswith('/') else self.base_url + '/' + href
-                    valid_media.append({'url': href, 'type': 'video'})
+                    # Проверяем дубликаты
+                    if not any(media['url'] == href for media in valid_media):
+                        valid_media.append({'url': href, 'type': 'video'})
             
             # 4. Ищем видео в data-атрибутах изображений (JoyReactor специфика)
             for img in images:
@@ -215,7 +223,9 @@ class JoyReactorParser(BaseParser):
                     if data_src and self.is_valid_video_url(data_src):
                         if not data_src.startswith('http'):
                             data_src = self.base_url + data_src if data_src.startswith('/') else self.base_url + '/' + data_src
-                        valid_media.append({'url': data_src, 'type': 'video'})
+                        # Проверяем дубликаты
+                        if not any(media['url'] == data_src for media in valid_media):
+                            valid_media.append({'url': data_src, 'type': 'video'})
                 
                 # Также проверяем src и data-src на наличие видео файлов
                 for attr in ['src', 'data-src']:
@@ -223,7 +233,9 @@ class JoyReactorParser(BaseParser):
                     if src and self.is_valid_video_url(src):
                         if not src.startswith('http'):
                             src = self.base_url + src if src.startswith('/') else self.base_url + '/' + src
-                        valid_media.append({'url': src, 'type': 'video'})
+                        # Проверяем дубликаты
+                        if not any(media['url'] == src for media in valid_media):
+                            valid_media.append({'url': src, 'type': 'video'})
             
             # 5. Ищем все элементы с атрибутами указывающими на видео
             all_elements = container.find_all(attrs={"data-webm": True})
@@ -236,7 +248,9 @@ class JoyReactorParser(BaseParser):
                     if video_src and self.is_valid_video_url(video_src):
                         if not video_src.startswith('http'):
                             video_src = self.base_url + video_src if video_src.startswith('/') else self.base_url + '/' + video_src
-                        valid_media.append({'url': video_src, 'type': 'video'})
+                        # Проверяем дубликаты
+                        if not any(media['url'] == video_src for media in valid_media):
+                            valid_media.append({'url': video_src, 'type': 'video'})
             
             # 6. Поиск видео файлов в тексте HTML (агрессивный поиск)
             html_text = str(container)
