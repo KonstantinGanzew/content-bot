@@ -120,11 +120,15 @@ class RedditParser(BaseParser):
             
             # Проверяем различные типы контента
             media_items = []
+            seen_file_ids = set()  # Для отслеживания дубликатов по ID файла
             
             # 1. Прямые изображения Reddit
             url = post_data.get('url', '')
             if url and self._is_reddit_image_url(url):
-                media_items.append({'url': url, 'type': 'image'})
+                file_id = self._extract_reddit_file_id(url)
+                if file_id and file_id not in seen_file_ids:
+                    media_items.append({'url': url, 'type': 'image'})
+                    seen_file_ids.add(file_id)
             
             # 2. Reddit video
             if post_data.get('is_video') and 'media' in post_data and post_data['media']:
@@ -133,7 +137,7 @@ class RedditParser(BaseParser):
                     video_url = reddit_video['fallback_url']
                     media_items.append({'url': video_url, 'type': 'video'})
             
-            # 3. Preview изображения
+            # 3. Preview изображения (только если оригинал не найден)
             preview = post_data.get('preview', {})
             if preview and 'images' in preview:
                 for image in preview['images']:
@@ -142,7 +146,10 @@ class RedditParser(BaseParser):
                         # Декодируем HTML entities
                         img_url = img_url.replace('&amp;', '&')
                         if self.is_valid_image_url(img_url):
-                            media_items.append({'url': img_url, 'type': 'image'})
+                            file_id = self._extract_reddit_file_id(img_url)
+                            if file_id and file_id not in seen_file_ids:
+                                media_items.append({'url': img_url, 'type': 'image'})
+                                seen_file_ids.add(file_id)
             
             # 4. Галерея изображений
             if post_data.get('is_gallery') and 'media_metadata' in post_data:
@@ -194,6 +201,22 @@ class RedditParser(BaseParser):
         """Проверяет является ли URL изображением Reddit"""
         reddit_image_domains = ['i.redd.it', 'preview.redd.it', 'external-preview.redd.it']
         return any(domain in url for domain in reddit_image_domains) and self.is_valid_image_url(url)
+    
+    def _extract_reddit_file_id(self, url: str) -> Optional[str]:
+        """Извлекает ID файла из Reddit URL для дедупликации"""
+        try:
+            if 'redd.it' not in url:
+                return None
+            
+            # Извлекаем имя файла из URL
+            # Для i.redd.it/filename.ext или preview.redd.it/filename.ext?params
+            filename = url.split('/')[-1].split('?')[0]  # Убираем GET параметры
+            file_id = filename.split('.')[0]  # Убираем расширение
+            
+            return file_id if file_id else None
+            
+        except Exception:
+            return None
     
     def _convert_imgur_url(self, url: str) -> Optional[str]:
         """Конвертирует Imgur URL в прямую ссылку на изображение"""
