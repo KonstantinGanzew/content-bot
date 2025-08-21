@@ -92,6 +92,7 @@ class TelegramSender:
             # Скачиваем новые медиа файлы
             valid_media_files = []
             sent_media_urls = []  # Список URL которые успешно отправим
+            sent_media_hashes = []  # Список хешей которые успешно отправим
             
             for i, media in enumerate(unique_media_list):
                 media_url = media['url']
@@ -120,11 +121,23 @@ class TelegramSender:
                     logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(unique_media_list)} - не удалось скачать")
                     continue
                 
+                # Проверяем хеш файла для дополнительной защиты от дубликатов
+                file_hash = image_manager.calculate_file_hash(local_file_path)
+                if file_hash:
+                    # Проверяем был ли уже отправлен файл с таким хешем
+                    if await database.is_media_hash_sent(file_hash):
+                        logger.info(f"🔄 Пропускаем медиа с уже отправленным хешем: {file_hash[:16]}...")
+                        continue
+                    sent_media_hashes.append(file_hash)
+                else:
+                    logger.warning(f"⚠️ Не удалось вычислить хеш для {local_file_path}")
+                
                 local_file_paths.append(local_file_path)
                 valid_media_files.append({
                     'file_path': local_file_path,
                     'media_type': media_type,
                     'media_url': media_url,  # Сохраняем URL для добавления в базу
+                    'file_hash': file_hash,  # Сохраняем хеш для добавления в базу
                     'is_first': i == 0
                 })
                 sent_media_urls.append(media_url)
@@ -160,11 +173,13 @@ class TelegramSender:
                 else:
                     logger.error(f"❌ Не удалось отправить группу медиа файлов")
             
-            # Если отправка успешна, добавляем URL медиа в базу отправленных
+            # Если отправка успешна, добавляем URL медиа и хеши в базу отправленных
             if success:
                 for media_url in sent_media_urls:
                     await database.add_media_url(media_url)
-                logger.info(f"📝 Добавлено {len(sent_media_urls)} URL медиа в базу отправленных")
+                for media_hash in sent_media_hashes:
+                    await database.add_media_hash(media_hash)
+                logger.info(f"📝 Добавлено {len(sent_media_urls)} URL медиа и {len(sent_media_hashes)} хешей в базу отправленных")
             
             return success
             

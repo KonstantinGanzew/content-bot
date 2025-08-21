@@ -3,9 +3,10 @@ import asyncio
 import aiofiles
 import aiohttp
 import logging
+import hashlib
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, Set, List
 from urllib.parse import urlparse, quote, urlunparse
 
 from config.constants import IMAGE_STORAGE
@@ -20,6 +21,9 @@ class ImageManager:
         self.organize_by_date = IMAGE_STORAGE['ORGANIZE_BY_DATE']
         self.max_filename_length = IMAGE_STORAGE['MAX_FILENAME_LENGTH']
         self.save_images = IMAGE_STORAGE['SAVE_IMAGES']
+        
+        # Кеш хешей для текущей сессии (чтобы не пересчитывать)
+        self._hash_cache: Dict[str, str] = {}
         
         # Создаем базовую директорию если её нет
         if self.save_images:
@@ -140,6 +144,20 @@ class ImageManager:
                         
                         # Проверяем что файл создался корректно
                         if file_path.exists() and file_path.stat().st_size > 0:
+                            # Проверяем на дубликат по хешу
+                            duplicate_path = self.is_file_duplicate(str(file_path))
+                            if duplicate_path:
+                                logger.info(f"🔄 Найден дубликат по хешу: {Path(duplicate_path).name}")
+                                logger.info(f"🗑️ Удаляем новый файл, используем существующий")
+                                
+                                # Удаляем только что скачанный файл
+                                try:
+                                    file_path.unlink()
+                                except Exception:
+                                    pass
+                                
+                                return duplicate_path
+                            
                             logger.info(f"✅ Медиа сохранено: {file_path}")
                             return str(file_path)
                         else:
@@ -156,6 +174,20 @@ class ImageManager:
                                         await f.write(chunk)
                                 
                                 if file_path.exists() and file_path.stat().st_size > 0:
+                                    # Проверяем на дубликат по хешу (fallback)
+                                    duplicate_path = self.is_file_duplicate(str(file_path))
+                                    if duplicate_path:
+                                        logger.info(f"🔄 Найден дубликат по хешу (fallback): {Path(duplicate_path).name}")
+                                        logger.info(f"🗑️ Удаляем новый файл, используем существующий")
+                                        
+                                        # Удаляем только что скачанный файл
+                                        try:
+                                            file_path.unlink()
+                                        except Exception:
+                                            pass
+                                        
+                                        return duplicate_path
+                                    
                                     logger.info(f"✅ Медиа сохранено (fallback): {file_path}")
                                     return str(file_path)
                                 else:
@@ -227,6 +259,147 @@ class ImageManager:
         
         if deleted_count > 0:
             logger.info(f"🗑️ Удалено {deleted_count} старых файлов")
+    
+    def calculate_file_hash(self, file_path: str) -> Optional[str]:
+        """Вычисляет SHA256 хеш файла."""
+        if file_path in self._hash_cache:
+            return self._hash_cache[file_path]
+        
+        try:
+            hash_sha256 = hashlib.sha256()
+            with open(file_path, 'rb') as f:
+                # Читаем файл блоками для экономии памяти
+                for chunk in iter(lambda: f.read(8192), b""):
+                    hash_sha256.update(chunk)
+            
+            file_hash = hash_sha256.hexdigest()
+            self._hash_cache[file_path] = file_hash
+            return file_hash
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка вычисления хеша для {file_path}: {e}")
+            return None
+    
+    async def calculate_file_hash_async(self, file_path: str) -> Optional[str]:
+        """Асинхронно вычисляет SHA256 хеш файла."""
+        if file_path in self._hash_cache:
+            return self._hash_cache[file_path]
+        
+        try:
+            hash_sha256 = hashlib.sha256()
+            async with aiofiles.open(file_path, 'rb') as f:
+                # Читаем файл блоками для экономии памяти
+                while chunk := await f.read(8192):
+                    hash_sha256.update(chunk)
+            
+            file_hash = hash_sha256.hexdigest()
+            self._hash_cache[file_path] = file_hash
+            return file_hash
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка вычисления хеша для {file_path}: {e}")
+            return None
+    
+    def find_duplicates_by_hash(self) -> Dict[str, List[str]]:
+        """Находит дубликаты файлов по хешу."""
+        if not self.save_images or not self.base_dir.exists():
+            return {}
+        
+        hash_to_files: Dict[str, List[str]] = {}
+        duplicates: Dict[str, List[str]] = {}
+        
+        logger.info("🔍 Поиск дубликатов по хешу...")
+        
+        for file_path in self.base_dir.rglob('*'):
+            if file_path.is_file():
+                file_hash = self.calculate_file_hash(str(file_path))
+                if file_hash:
+                    if file_hash not in hash_to_files:
+                        hash_to_files[file_hash] = []
+                    hash_to_files[file_hash].append(str(file_path))
+        
+        # Находим хеши с несколькими файлами (дубликаты)
+        for file_hash, files in hash_to_files.items():
+            if len(files) > 1:
+                duplicates[file_hash] = files
+                logger.info(f"🔄 Найден дубликат: {len(files)} файлов с хешем {file_hash[:16]}...")
+        
+        logger.info(f"📊 Найдено {len(duplicates)} групп дубликатов")
+        return duplicates
+    
+    def is_file_duplicate(self, file_path: str) -> Optional[str]:
+        """Проверяет является ли файл дубликатом существующего. Возвращает путь к оригиналу."""
+        if not self.save_images or not self.base_dir.exists():
+            return None
+        
+        file_hash = self.calculate_file_hash(file_path)
+        if not file_hash:
+            return None
+        
+        # Ищем файлы с таким же хешем в директории сохранения
+        for existing_file in self.base_dir.rglob('*'):
+            if existing_file.is_file() and str(existing_file) != file_path:
+                existing_hash = self.calculate_file_hash(str(existing_file))
+                if existing_hash == file_hash:
+                    return str(existing_file)
+        
+        return None
+    
+    def remove_duplicate_files(self, keep_oldest: bool = True) -> int:
+        """Удаляет дубликаты, оставляя один файл из группы."""
+        duplicates = self.find_duplicates_by_hash()
+        removed_count = 0
+        
+        for file_hash, files in duplicates.items():
+            if len(files) <= 1:
+                continue
+            
+            # Сортируем файлы по времени создания
+            files_with_time = []
+            for file_path in files:
+                try:
+                    path_obj = Path(file_path)
+                    create_time = path_obj.stat().st_ctime
+                    files_with_time.append((file_path, create_time))
+                except Exception:
+                    continue
+            
+            if not files_with_time:
+                continue
+                
+            # Сортируем по времени
+            files_with_time.sort(key=lambda x: x[1])
+            
+            # Определяем какой файл оставить
+            if keep_oldest:
+                keep_file = files_with_time[0][0]  # Самый старый
+                remove_files = [f[0] for f in files_with_time[1:]]
+            else:
+                keep_file = files_with_time[-1][0]  # Самый новый
+                remove_files = [f[0] for f in files_with_time[:-1]]
+            
+            # Удаляем дубликаты
+            for remove_file in remove_files:
+                try:
+                    Path(remove_file).unlink()
+                    logger.info(f"🗑️ Удален дубликат: {Path(remove_file).name}")
+                    removed_count += 1
+                    
+                    # Убираем из кеша
+                    if remove_file in self._hash_cache:
+                        del self._hash_cache[remove_file]
+                        
+                except Exception as e:
+                    logger.error(f"❌ Не удалось удалить дубликат {remove_file}: {e}")
+            
+            logger.info(f"💾 Оставлен файл: {Path(keep_file).name}")
+        
+        if removed_count > 0:
+            logger.info(f"🧹 Удалено {removed_count} дубликатов")
+        else:
+            logger.info("✅ Дубликатов не найдено")
+            
+        return removed_count
 
 # Создаем глобальный экземпляр
 image_manager = ImageManager() 

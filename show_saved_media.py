@@ -46,6 +46,27 @@ def main():
                 if file_count > 0:
                     print(f"  📆 {date_dir.name}: {file_count} файлов")
     
+    # Проверяем наличие дубликатов по хешу
+    print("\n🔍 Проверка дубликатов по хешу...")
+    duplicates = image_manager.find_duplicates_by_hash()
+    
+    if duplicates:
+        total_duplicates = sum(len(files) - 1 for files in duplicates.values())
+        duplicate_size = 0
+        
+        for files in duplicates.values():
+            for file_path in files[1:]:  # Пропускаем первый файл в каждой группе
+                try:
+                    duplicate_size += Path(file_path).stat().st_size
+                except Exception:
+                    pass
+        
+        print(f"⚠️ Найдено дубликатов: {len(duplicates)} групп, {total_duplicates} файлов")
+        print(f"💾 Можно освободить: {duplicate_size / (1024*1024):.2f} МБ")
+        print("🔧 Используйте find_duplicates_by_hash.bat для удаления дубликатов")
+    else:
+        print("✅ Дубликаты не найдены")
+    
     print("\n💡 Используйте этот скрипт для мониторинга дискового пространства")
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 from datetime import datetime, timedelta
 
 from parsers.joyreactor_parser import JoyReactorParser
+from parsers.reddit_parser import RedditParser
 from parsers.base_parser import PostData
 from telegram.bot import TelegramSender
 from utils.database import database
@@ -18,7 +19,8 @@ class ParserScheduler:
     def __init__(self):
         self.telegram_sender = TelegramSender()
         self.parsers = {
-            'joyreactor': JoyReactorParser()
+            'joyreactor': JoyReactorParser(),
+            'reddit': RedditParser()
         }
         self.running = False
         self.stats = {

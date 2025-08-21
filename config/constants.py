@@ -10,6 +10,30 @@ PARSERS = {
             'IMAGE': 'img',
             'POST_LINK': 'a[href*="/post/"]'
         }
+    },
+    'REDDIT': {
+        'BASE_URL': 'https://www.reddit.com',
+        'SUBREDDIT': 'KafkaFPS',  # Название subreddit без r/
+        'JSON_URL': 'https://www.reddit.com/r/KafkaFPS/.json',
+        'HTML_URL': 'https://www.reddit.com/r/KafkaFPS/',
+        'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 RedditParser/1.0',
+        'REQUEST_DELAY': 3,  # Reddit более строг к частоте запросов
+        'USE_JSON_API': True,  # Предпочитаем JSON API
+        'IMAGE_SELECTORS': {
+            'POST_CONTAINER': '[data-testid="post-container"], .Post, .thing',
+            'IMAGE': 'img[src*="i.redd.it"], img[src*="preview.redd.it"], img[src*="external-preview.redd.it"]',
+            'VIDEO': 'video, source[src*=".mp4"]',
+            'POST_LINK': 'a[href*="/r/"][href*="/comments/"], .title > a',
+            'TITLE': '[data-testid="post-content"] h3, .Post h3, .title a, .thing .title'
+        },
+        'HEADERS': {
+            'Accept': 'application/json, text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
     }
 }
 
@@ -47,6 +71,15 @@ CONTENT_FILTERS = {
             'топовый комментарий',
             'крутой комментарий'
         ]
+    },
+    'REDDIT': {
+        'FILTER_ENABLED': False,  # По умолчанию отключено для Reddit
+        'BLOCKED_PHRASES': [
+            '[deleted]',
+            '[removed]'
+        ],
+        'MIN_SCORE': 1,  # Минимальный рейтинг поста
+        'FILTER_NSFW': False  # Фильтровать NSFW контент (если нужно)
     }
 }
 
