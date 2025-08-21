@@ -10,8 +10,9 @@ from aiogram import Bot, types
 from aiogram.exceptions import TelegramAPIError
 
 from config.settings import settings
-from config.constants import TELEGRAM
+from config.constants import TELEGRAM, IMAGE_STORAGE
 from parsers.base_parser import PostData
+from utils.image_manager import image_manager
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,15 @@ class TelegramSender:
         # Создаем временную директорию
         import tempfile
         self.temp_dir = tempfile.mkdtemp()
+        
+        # Логируем информацию о сохранении медиа файлов
+        if IMAGE_STORAGE['SAVE_IMAGES']:
+            media_info = image_manager.get_saved_media_info()
+            logger.info(f"💾 Сохранение медиа на ПК включено")
+            logger.info(f"📂 Директория: {media_info['base_directory']}")
+            logger.info(f"📊 Текущая статистика: {media_info['total_files']} файлов, {media_info['total_size_mb']} МБ")
+        else:
+            logger.info(f"📤 Сохранение медиа на ПК отключено (только временные файлы)")
     
     async def send_post(self, post_data: PostData) -> bool:
         """Отправляет пост в Telegram чат."""
@@ -104,8 +114,8 @@ class TelegramSender:
                     logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(unique_media_list)} - неподдерживаемый формат")
                     continue
                 
-                # Скачиваем медиа файл
-                local_file_path = await self._download_media(media_url, f"{post_data.post_id}_{i}", media_type)
+                # Скачиваем и сохраняем медиа файл на ПК
+                local_file_path = await self._download_and_save_media(media_url, f"{post_data.post_id}_{i}", media_type)
                 if not local_file_path:
                     logger.warning(f"⚠️ Пропускаем медиа {i+1}/{len(unique_media_list)} - не удалось скачать")
                     continue
@@ -162,16 +172,52 @@ class TelegramSender:
             logger.error(f"💥 Ошибка при отправке поста {post_data.post_id}: {e}")
             return False
         finally:
-            # Всегда удаляем временные файлы
+            # Удаляем только временные файлы (которые находятся в temp_dir)
             for file_path in local_file_paths:
                 if file_path and os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Не удалось удалить временный файл {file_path}: {e}")
+                    # Проверяем что файл находится в временной директории
+                    if os.path.dirname(file_path) == self.temp_dir:
+                        try:
+                            os.remove(file_path)
+                            logger.debug(f"🗑️ Удален временный файл: {os.path.basename(file_path)}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Не удалось удалить временный файл {file_path}: {e}")
+                    else:
+                        # Это постоянный файл, не удаляем
+                        logger.debug(f"💾 Постоянный файл сохранен: {file_path}")
     
-    async def _download_media(self, media_url: str, post_id: str, media_type: str) -> Optional[str]:
-        """Скачивает медиа файл и сохраняет локально."""
+    async def _download_and_save_media(self, media_url: str, post_id: str, media_type: str) -> Optional[str]:
+        """Скачивает и сохраняет медиа файл на ПК, затем создает временную копию для отправки."""
+        try:
+            # Сначала скачиваем и сохраняем файл на ПК используя image_manager
+            if IMAGE_STORAGE['SAVE_IMAGES']:
+                permanent_file_path = await image_manager.download_and_save_media(media_url, post_id, media_type)
+                if permanent_file_path:
+                    logger.info(f"💾 Медиа сохранено на ПК: {permanent_file_path}")
+                    
+                    # Создаем временную копию для отправки в Telegram
+                    file_extension = self._get_media_file_extension(media_url, media_type)
+                    temp_filename = f"temp_{post_id}_{hash(media_url) % 10000}{file_extension}"
+                    temp_file_path = os.path.join(self.temp_dir, temp_filename)
+                    
+                    # Копируем постоянный файл во временную директорию для отправки
+                    import shutil
+                    shutil.copy2(permanent_file_path, temp_file_path)
+                    
+                    logger.debug(f"📋 Создана временная копия для отправки: {temp_file_path}")
+                    return temp_file_path
+                else:
+                    logger.warning(f"⚠️ Не удалось сохранить медиа на ПК, используем старый способ")
+            
+            # Если сохранение на ПК отключено или не удалось, используем старый способ (временное скачивание)
+            return await self._download_media_temp(media_url, post_id, media_type)
+                    
+        except Exception as e:
+            logger.error(f"💥 Ошибка при скачивании и сохранении медиа {media_url}: {e}")
+            return None
+    
+    async def _download_media_temp(self, media_url: str, post_id: str, media_type: str) -> Optional[str]:
+        """Скачивает медиа файл только во временную папку (старый способ)."""
         try:
             # Кодируем URL для правильной обработки кириллических символов
             parsed = urlparse(media_url)
@@ -181,7 +227,7 @@ class TelegramSender:
                 parsed.params, parsed.query, parsed.fragment
             ))
             
-            logger.debug(f"🔗 Скачивание с URL: {encoded_url}")
+            logger.debug(f"🔗 Временное скачивание с URL: {encoded_url}")
             
             # Определяем расширение файла из URL или content-type
             file_extension = self._get_media_file_extension(media_url, media_type)
@@ -232,7 +278,7 @@ class TelegramSender:
                         return None
                     
         except Exception as e:
-            logger.error(f"💥 Ошибка при скачивании медиа {media_url}: {e}")
+            logger.error(f"💥 Ошибка при временном скачивании медиа {media_url}: {e}")
             return None
     
     async def _download_from_response(self, response, file_path, max_size):

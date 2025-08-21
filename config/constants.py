@@ -58,4 +58,12 @@ DEFAULT_HEADERS = {
     'Accept-Encoding': 'gzip, deflate, br',
     'Connection': 'keep-alive',
     'Upgrade-Insecure-Requests': '1'
+}
+
+# Настройки для сохранения изображений на ПК
+IMAGE_STORAGE = {
+    'SAVE_IMAGES': True,  # Включить сохранение изображений на ПК
+    'IMAGES_DIR': 'downloaded_images',  # Папка для сохранения изображений
+    'ORGANIZE_BY_DATE': True,  # Организовать по датам (YYYY-MM-DD)
+    'MAX_FILENAME_LENGTH': 100  # Максимальная длина имени файла
 } 

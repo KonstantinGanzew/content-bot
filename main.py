@@ -10,6 +10,7 @@ import signal
 import sys
 from pathlib import Path
 import os
+import platform
 
 # Добавляем корневую директорию в PYTHONPATH
 sys.path.insert(0, str(Path(__file__).parent))
@@ -32,6 +33,26 @@ def signal_handler(signum, frame):
     logger.info(f"Получен сигнал {signum}. Завершение работы...")
     shutdown_event.set()
 
+def is_process_running(pid):
+    """Проверяет, запущен ли процесс с данным PID (кроссплатформенно)."""
+    try:
+        if platform.system() == "Windows":
+            # На Windows используем tasklist
+            import subprocess
+            result = subprocess.run(
+                ['tasklist', '/FI', f'PID eq {pid}'],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            return str(pid) in result.stdout
+        else:
+            # На Unix системах используем os.kill с сигналом 0
+            os.kill(pid, 0)
+            return True
+    except (OSError, ProcessLookupError, subprocess.SubprocessError):
+        return False
+
 async def check_single_instance():
     """Проверяет что запущен только один экземпляр бота."""
     lock_file = Path("data/bot.lock")
@@ -48,12 +69,11 @@ async def check_single_instance():
                     old_pid = int(f.read().strip())
                 
                 # Проверяем активен ли процесс
-                try:
-                    os.kill(old_pid, 0)  # Проверяем что процесс существует
+                if is_process_running(old_pid):
                     logger.error(f"❌ Бот уже запущен (PID: {old_pid})")
                     logger.error("   Завершите предыдущий экземпляр или удалите файл data/bot.lock")
                     return False
-                except (OSError, ProcessLookupError):
+                else:
                     # Процесс не найден, файл блокировки устарел
                     logger.info("Найден устаревший файл блокировки, удаляем...")
                     lock_file.unlink()

@@ -24,10 +24,12 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+downloaded_images
 
 # PyInstaller
 *.manifest
 *.spec
+*.bat
 
 # Installer logs
 pip-log.txt
