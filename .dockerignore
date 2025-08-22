@@ -1,0 +1,65 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.pytest_cache
+.coverage
+.tox
+venv/
+env/
+.venv/
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Downloaded files (будут созданы в контейнере)
+downloaded_images/
+
+# Data files (будут подключены как volume)
+data/
+*.db
+*.json
+
+# Test files
+test_*.py
+*_test.py
+debug_*.py
+demo_*.py
+
+# Documentation
+*.md
+docs/
+
+# Batch files (Windows specific)
+*.bat
+
+# Docker
+docker-compose.build.yml
+.dockerignore 

@@ -237,28 +237,79 @@ class ImageManager:
             'base_directory': str(self.base_dir.absolute())
         }
     
-    def cleanup_old_files(self, days_to_keep: int = 30):
-        """Очищает старые файлы (опционально)."""
+    def cleanup_old_files(self, hours_to_keep: Optional[int] = None, days_to_keep: Optional[int] = None, max_files_per_day: Optional[int] = None):
+        """Очищает старые файлы."""
         if not self.save_images or not self.base_dir.exists():
-            return
+            return {'deleted_files': 0, 'freed_space_mb': 0}
         
         from datetime import datetime, timedelta
+        from collections import defaultdict
         
-        cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+        # Если ничего не указано, используем значения по умолчанию
+        if hours_to_keep is None and days_to_keep is None:
+            hours_to_keep = 48  # По умолчанию 2 дня
+        
+        # Вычисляем дату отсечки
+        if hours_to_keep:
+            cutoff_date = datetime.now() - timedelta(hours=hours_to_keep)
+        elif days_to_keep:
+            cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+        else:
+            cutoff_date = datetime.now() - timedelta(hours=48)  # Fallback
+        
         deleted_count = 0
+        freed_space = 0
+        files_by_date = defaultdict(list)
         
+        # Собираем информацию о файлах
         for file_path in self.base_dir.rglob('*'):
             if file_path.is_file():
                 file_time = datetime.fromtimestamp(file_path.stat().st_mtime)
+                file_date = file_time.date()
+                files_by_date[file_date].append((file_path, file_time, file_path.stat().st_size))
+        
+        # Удаляем старые файлы
+        for file_path in self.base_dir.rglob('*'):
+            if file_path.is_file():
+                file_time = datetime.fromtimestamp(file_path.stat().st_mtime)
+                file_size = file_path.stat().st_size
+                
+                should_delete = False
+                
+                # Удаляем если файл старше указанного времени
                 if file_time < cutoff_date:
+                    should_delete = True
+                    reason = f"старше {hours_to_keep}ч" if hours_to_keep else f"старше {days_to_keep}д"
+                
+                # Удаляем если превышен лимит файлов в день
+                elif max_files_per_day:
+                    file_date = file_time.date()
+                    if len(files_by_date[file_date]) > max_files_per_day:
+                        # Удаляем самые старые файлы в этом дне
+                        sorted_files = sorted(files_by_date[file_date], key=lambda x: x[1])
+                        if (file_path, file_time, file_size) in sorted_files[:-max_files_per_day]:
+                            should_delete = True
+                            reason = f"превышен лимит {max_files_per_day} файлов/день"
+                
+                if should_delete:
                     try:
                         file_path.unlink()
                         deleted_count += 1
+                        freed_space += file_size
+                        logger.debug(f"🗑️ Удален файл ({reason}): {file_path.name}")
                     except Exception as e:
-                        logger.warning(f"⚠️ Не удалось удалить старый файл {file_path}: {e}")
+                        logger.warning(f"⚠️ Не удалось удалить файл {file_path}: {e}")
+        
+        freed_space_mb = round(freed_space / (1024 * 1024), 2)
         
         if deleted_count > 0:
-            logger.info(f"🗑️ Удалено {deleted_count} старых файлов")
+            logger.info(f"🗑️ Автоочистка: удалено {deleted_count} файлов, освобождено {freed_space_mb} МБ")
+        
+        return {
+            'deleted_files': deleted_count,
+            'freed_space_bytes': freed_space,
+            'freed_space_mb': freed_space_mb
+        }
     
     def calculate_file_hash(self, file_path: str) -> Optional[str]:
         """Вычисляет SHA256 хеш файла."""

@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  parser-bot:
+    image: parser-bot:latest  # Использует готовый собранный образ
+    container_name: parser-bot
+    restart: unless-stopped
+    
+    # Переменные окружения из .env файла
+    env_file:
+      - .env
+      
+    # Монтируем папки для постоянного хранения данных
+    volumes:
+      # Конфигурационные файлы
+      - ./config:/app/config:ro
+      
+      # Сохраненные изображения
+      - parser-bot-images:/app/downloaded_images
+      
+      # Логи
+      - parser-bot-logs:/app/logs
+      
+      # База данных (JSON файлы)
+      - parser-bot-data:/app/data
+    
+    # Настройки ресурсов
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    
+    # Проверка здоровья
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Сетевые настройки
+    networks:
+      - parser-bot-network
+    
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # Дополнительный сервис для мониторинга (опционально)
+  parser-bot-monitor:
+    image: alpine:latest
+    container_name: parser-bot-monitor
+    depends_on:
+      - parser-bot
+    command: >
+      sh -c "
+      while true; do
+        echo '=== $(date) ==='
+        echo 'Parser Bot Status:'
+        if wget -q --spider http://parser-bot:8000/health 2>/dev/null; then
+          echo '✅ Parser Bot is healthy'
+        else
+          echo '❌ Parser Bot is not responding'
+        fi
+        echo ''
+        sleep 300  # Проверка каждые 5 минут
+      done
+      "
+    networks:
+      - parser-bot-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+# Именованные volume для постоянного хранения данных
+volumes:
+  parser-bot-images:
+    name: parser-bot-images
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker-volumes/images
+      
+  parser-bot-logs:
+    name: parser-bot-logs
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./docker-volumes/logs
+      
+  parser-bot-data:
+    name: parser-bot-data
+    driver: local
+    driver_opts:
+      type: none  
+      o: bind
+      device: ./docker-volumes/data
+
+# Сеть для изоляции
+networks:
+  parser-bot-network:
+    name: parser-bot-network
+    driver: bridge 

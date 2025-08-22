@@ -29,6 +29,8 @@ class ParserScheduler:
             'last_run': None,
             'errors': 0
         }
+        # Время последней очистки файлов
+        self.last_cleanup = None
     
     async def start(self):
         """Запускает планировщик."""
@@ -62,6 +64,9 @@ class ParserScheduler:
         while self.running:
             try:
                 await self.run_parsing_cycle()
+                
+                # Проверяем нужна ли автоочистка файлов
+                await self._check_and_cleanup_files()
                 
                 # Ждем до следующего цикла
                 if self.running:
@@ -217,15 +222,80 @@ class ParserScheduler:
         
         return True
     
+    async def _check_and_cleanup_files(self):
+        """Проверяет и выполняет автоочистку файлов при необходимости."""
+        from datetime import datetime, timedelta
+        from config.constants import IMAGE_STORAGE
+        from utils.image_manager import image_manager
+        
+        # Проверяем включена ли автоочистка
+        if not IMAGE_STORAGE.get('AUTO_CLEANUP_ENABLED', False):
+            return
+        
+        cleanup_interval_hours = IMAGE_STORAGE.get('CLEANUP_INTERVAL_HOURS', 1)
+        files_keep_hours = IMAGE_STORAGE.get('FILES_KEEP_HOURS', 48)
+        max_files_per_day = IMAGE_STORAGE.get('MAX_FILES_PER_DAY', 1000)
+        
+        # Проверяем нужна ли очистка
+        now = datetime.now()
+        should_cleanup = False
+        
+        if self.last_cleanup is None:
+            should_cleanup = True
+            reason = "первая очистка"
+        elif now - self.last_cleanup >= timedelta(hours=cleanup_interval_hours):
+            should_cleanup = True
+            reason = f"прошло {cleanup_interval_hours}ч с последней очистки"
+        
+        if should_cleanup:
+            try:
+                logger.info(f"🗑️ Запуск автоочистки файлов ({reason})")
+                
+                # Выполняем очистку
+                cleanup_result = image_manager.cleanup_old_files(
+                    hours_to_keep=files_keep_hours,
+                    max_files_per_day=max_files_per_day
+                )
+                
+                # Обновляем время последней очистки
+                self.last_cleanup = now
+                
+                # Логируем результат если что-то было удалено
+                if cleanup_result['deleted_files'] > 0:
+                    logger.info(f"✅ Автоочистка завершена: {cleanup_result['deleted_files']} файлов, "
+                              f"{cleanup_result['freed_space_mb']} МБ освобождено")
+                
+                # Логируем общую статистику файлов
+                media_info = image_manager.get_saved_media_info()
+                if media_info['total_files'] > 0:
+                    logger.debug(f"📊 Файлов на диске: {media_info['total_files']} ({media_info['total_size_mb']} МБ)")
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при автоочистке файлов: {e}")
+    
     async def get_stats(self) -> Dict[str, Any]:
         """Возвращает статистику работы."""
         db_stats = await database.get_stats()
+        
+        # Добавляем статистику сохраненных файлов
+        from utils.image_manager import image_manager
+        from config.constants import IMAGE_STORAGE
+        media_info = image_manager.get_saved_media_info()
         
         return {
             'scheduler': self.stats,
             'database': db_stats,
             'running': self.running,
-            'parsers': list(self.parsers.keys())
+            'parsers': list(self.parsers.keys()),
+            'media_storage': {
+                'enabled': IMAGE_STORAGE.get('SAVE_IMAGES', False),
+                'auto_cleanup_enabled': IMAGE_STORAGE.get('AUTO_CLEANUP_ENABLED', False),
+                'total_files': media_info['total_files'],
+                'total_size_mb': media_info['total_size_mb'],
+                'last_cleanup': self.last_cleanup.isoformat() if self.last_cleanup else None,
+                'cleanup_interval_hours': IMAGE_STORAGE.get('CLEANUP_INTERVAL_HOURS', 1),
+                'files_keep_hours': IMAGE_STORAGE.get('FILES_KEEP_HOURS', 48)
+            }
         }
     
     async def manual_run(self) -> Dict[str, Any]:

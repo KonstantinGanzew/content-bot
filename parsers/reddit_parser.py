@@ -139,16 +139,93 @@ class RedditParser(BaseParser):
             # 2. Reddit video
             if is_video_post and 'media' in post_data and post_data['media']:
                 reddit_video = post_data['media'].get('reddit_video', {})
-                if reddit_video and 'fallback_url' in reddit_video:
-                    video_url = reddit_video['fallback_url']
+                if reddit_video:
+                    video_url = None
                     
-                    # Попытаемся получить версию со звуком
-                    # Reddit DASH видео часто без звука, попробуем найти лучшую версию
-                    if 'DASH_' in video_url and '?source=fallback' in video_url:
-                        # Убираем source=fallback чтобы получить оригинальное качество
-                        better_video_url = video_url.replace('?source=fallback', '')
-                        media_items.append({'url': better_video_url, 'type': 'video'})
+                    # Приоритет для видео со звуком:
+                    # 1. scrubber_media_url (низкое качество, но со звуком)
+                    # 2. Модифицированный HLS URL
+                    # 3. fallback_url без source=fallback
+                    
+                    if reddit_video.get('has_audio', False):
+                        # У видео есть звук - ищем лучший способ его получить
+                        
+                        # Вариант 1: Используем PACKAGED-MEDIA URL (с объединенным аудио+видео)
+                        if 'fallback_url' in reddit_video:
+                            fallback_url = reddit_video['fallback_url']
+                            
+                            # Извлекаем video ID из fallback URL
+                            # v.redd.it/VIDEO_ID/DASH_xxx.mp4 -> VIDEO_ID
+                            import re
+                            video_id_match = re.search(r'v\.redd\.it/([^/]+)/', fallback_url)
+                            
+                            if video_id_match:
+                                video_id = video_id_match.group(1)
+                                
+                                # Строим packaged-media URL (с аудио!)
+                                # Формат: packaged-media.redd.it/VIDEO_ID/pb/m2-res_XXXp.mp4?m=DASHPlaylist.mpd&v=1&e=TIMESTAMP&s=HASH
+                                
+                                # Пробуем разные качества (220p обычно со звуком)
+                                resolutions = ['220p', '360p', '480p', '720p']
+                                
+                                # Построим URL на основе примера пользователя
+                                base_packaged_url = f"https://packaged-media.redd.it/{video_id}/pb/m2-res_220p.mp4"
+                                
+                                # Добавляем параметры для DASH плейлиста (аналогично пользовательскому примеру)
+                                dash_url = reddit_video.get('dash_url', '')
+                                if 'a=' in dash_url:
+                                    # Извлекаем параметры авторизации из dash_url
+                                    auth_params = dash_url.split('?')[1] if '?' in dash_url else ''
+                                    packaged_url = f"{base_packaged_url}?m=DASHPlaylist.mpd&{auth_params}"
+                                else:
+                                    # Базовая версия без авторизации
+                                    packaged_url = f"{base_packaged_url}?m=DASHPlaylist.mpd&v=1"
+                                
+                                video_url = packaged_url
+                                
+                                self.logger.info(f"🎵 Построен packaged-media URL со звуком:")
+                                self.logger.info(f"   Video ID: {video_id}")
+                                self.logger.info(f"   Packaged URL: {packaged_url}")
+                            else:
+                                # Fallback к обычному подходу
+                                video_url = fallback_url.replace('?source=fallback', '')
+                        
+                        # Вариант 2: scrubber_media_url (обычно со звуком, низкое качество)  
+                        elif 'scrubber_media_url' in reddit_video:
+                            scrubber_url = reddit_video['scrubber_media_url']
+                            # Пробуем увеличить качество scrubber URL
+                            if 'DASH_96' in scrubber_url:
+                                # Заменяем 96 на более высокое разрешение
+                                high_quality_url = scrubber_url.replace('DASH_96', 'DASH_360')
+                                video_url = high_quality_url
+                            else:
+                                video_url = scrubber_url
+                        
+                        # Вариант 2: Попытка с HLS базовым URL  
+                        elif 'hls_url' in reddit_video:
+                            hls_url = reddit_video['hls_url']
+                            base_video_url = hls_url.split('/HLSPlaylist.m3u8')[0]
+                            # Пробуем разные разрешения, начиная с более низких (больше шансов на звук)
+                            for resolution in ['360', '480', '240', '720']:
+                                test_url = f"{base_video_url}/DASH_{resolution}.mp4"
+                                video_url = test_url
+                                break  # Берем первый вариант
+                        
+                        # Вариант 3: fallback без source=fallback
+                        elif 'fallback_url' in reddit_video:
+                            # Fallback URL как последний вариант
+                            video_url = reddit_video['fallback_url']
+                            # Убираем source=fallback для лучшего качества
+                            if '?source=fallback' in video_url:
+                                video_url = video_url.replace('?source=fallback', '')
                     else:
+                        # Если has_audio == False, используем fallback
+                        if 'fallback_url' in reddit_video:
+                            video_url = reddit_video['fallback_url']
+                            if '?source=fallback' in video_url:
+                                video_url = video_url.replace('?source=fallback', '')
+                    
+                    if video_url:
                         media_items.append({'url': video_url, 'type': 'video'})
             
             # 3. Preview изображения (только если НЕ видео пост и оригинал не найден)
