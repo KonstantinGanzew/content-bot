@@ -381,8 +381,23 @@ class TelegramSender:
     
     def _format_caption(self, post_data: PostData) -> str:
         """Форматирует подпись для поста."""
-        # Отправляем медиа без подписи по запросу пользователя
-        return ""
+        caption_parts = []
+        
+        # Добавляем заголовок поста
+        if post_data.title:
+            caption_parts.append(f"<b>{self._escape_html(post_data.title)}</b>")
+        
+        # Добавляем описание поста если есть
+        if post_data.description:
+            caption_parts.append(f"\n{self._escape_html(post_data.description)}")
+        
+        caption = "".join(caption_parts)
+        
+        # Telegram ограничивает длину caption до 1024 символов
+        if len(caption) > 1024:
+            caption = caption[:1021] + "..."
+        
+        return caption
     
     def _escape_html(self, text: str) -> str:
         """Экранирует HTML символы."""

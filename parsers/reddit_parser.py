@@ -115,31 +115,45 @@ class RedditParser(BaseParser):
                 return None
             
             title = post_data.get('title', 'Без заголовка')
+            description = post_data.get('selftext', '').strip()  # Описание поста
             permalink = post_data.get('permalink', '')
             post_url = f"{self.base_url}{permalink}" if permalink else ''
             
             # Проверяем различные типы контента
             media_items = []
             seen_file_ids = set()  # Для отслеживания дубликатов по ID файла
+            is_video_post = post_data.get('is_video', False)  # Определяем тип поста сразу
             
-            # 1. Прямые изображения Reddit
+            # 1. Прямые изображения Reddit (исключаем превью для видео постов)
             url = post_data.get('url', '')
             if url and self._is_reddit_image_url(url):
-                file_id = self._extract_reddit_file_id(url)
-                if file_id and file_id not in seen_file_ids:
-                    media_items.append({'url': url, 'type': 'image'})
-                    seen_file_ids.add(file_id)
+                # Для видео постов не добавляем external-preview (это превью к видео)
+                if is_video_post and 'external-preview.redd.it' in url:
+                    pass  # Пропускаем превью для видео постов
+                else:
+                    file_id = self._extract_reddit_file_id(url)
+                    if file_id and file_id not in seen_file_ids:
+                        media_items.append({'url': url, 'type': 'image'})
+                        seen_file_ids.add(file_id)
             
             # 2. Reddit video
-            if post_data.get('is_video') and 'media' in post_data and post_data['media']:
+            if is_video_post and 'media' in post_data and post_data['media']:
                 reddit_video = post_data['media'].get('reddit_video', {})
                 if reddit_video and 'fallback_url' in reddit_video:
                     video_url = reddit_video['fallback_url']
-                    media_items.append({'url': video_url, 'type': 'video'})
+                    
+                    # Попытаемся получить версию со звуком
+                    # Reddit DASH видео часто без звука, попробуем найти лучшую версию
+                    if 'DASH_' in video_url and '?source=fallback' in video_url:
+                        # Убираем source=fallback чтобы получить оригинальное качество
+                        better_video_url = video_url.replace('?source=fallback', '')
+                        media_items.append({'url': better_video_url, 'type': 'video'})
+                    else:
+                        media_items.append({'url': video_url, 'type': 'video'})
             
-            # 3. Preview изображения (только если оригинал не найден)
+            # 3. Preview изображения (только если НЕ видео пост и оригинал не найден)
             preview = post_data.get('preview', {})
-            if preview and 'images' in preview:
+            if not is_video_post and preview and 'images' in preview:
                 for image in preview['images']:
                     if 'source' in image and 'url' in image['source']:
                         img_url = image['source']['url']
@@ -187,6 +201,7 @@ class RedditParser(BaseParser):
                 post_id=f"reddit_{post_id}",
                 media_url=primary_media['url'],
                 title=title,
+                description=description,
                 post_url=post_url,
                 tags=[f"r/{self.subreddit}"],
                 media_type=primary_media['type'],
@@ -304,6 +319,9 @@ class RedditParser(BaseParser):
             title_elem = container.select_one(self.image_selectors['TITLE'])
             title = title_elem.get_text(strip=True) if title_elem else "Без заголовка"
             
+            # Описание поста (из HTML сложнее извлечь, оставляем пустым)
+            description = ""
+            
             # Ищем медиа
             media_items = []
             
@@ -335,6 +353,7 @@ class RedditParser(BaseParser):
                 post_id=f"reddit_{post_id}",
                 media_url=primary_media['url'],
                 title=title,
+                description=description,
                 post_url=post_url,
                 tags=[f"r/{self.subreddit}"],
                 media_type=primary_media['type'],
