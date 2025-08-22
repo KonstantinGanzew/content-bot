@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   parser-bot:
-    image: parser-bot:latest  # Использует готовый собранный образ
+    image: kureed/parser-bot:latest  # Образ из Docker Hub
     container_name: parser-bot
     restart: unless-stopped
     

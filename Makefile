@@ -1,7 +1,7 @@
 # Makefile для управления Parser Bot Docker контейнерами
 
 # Переменные
-IMAGE_NAME = parser-bot
+IMAGE_NAME = kureed/parser-bot
 CONTAINER_NAME = parser-bot
 DOCKER_COMPOSE_FILE = docker-compose.yml
 DOCKER_BUILD_FILE = docker-compose.build.yml
